@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cell Annotator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700&display=swap">
+<style>
+:root{--bg:#f6f7f9;--fg:#1a1d23;--muted:#677084;--card:#fff;--border:#dde1e8;--accent:#2f6bff;--accent-fg:#fff;color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14161a;--fg:#eceef2;--muted:#9aa3b5;--card:#1f2228;--border:#343944;--accent:#5b8cff;--accent-fg:#0b0d12;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14161a;--fg:#eceef2;--muted:#9aa3b5;--card:#1f2228;--border:#343944;--accent:#5b8cff;--accent-fg:#0b0d12;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{-webkit-text-size-adjust:100%;overscroll-behavior:none;background:var(--bg);color:var(--fg);font-family:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;flex-direction:column}
+header{padding:12px 16px;font-weight:700;font-size:18px}
+main{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;padding:0 12px 12px;gap:10px}
+button,label.btn{font:inherit;font-weight:600;font-size:15px;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--fg);cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:44px;position:relative;touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+button.primary,label.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+button.on{outline:2px solid var(--accent)}
+#start{margin:auto;text-align:center;max-width:380px}
+#start p{color:var(--muted);margin:0 0 18px}
+#start .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+#editor{display:none;width:100%;flex:1;min-height:0;flex-direction:column;align-items:center;gap:10px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
+.sw{width:38px;height:38px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--border)}
+.sw.on{outline:3px solid var(--accent);outline-offset:1px}
+.stage{flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;overflow:auto}
+.wrap{position:relative;display:inline-block;line-height:0}
+canvas{max-width:100%;max-height:calc(100dvh - 210px);touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;border-radius:8px;background:#000;cursor:crosshair}
+#ti{position:absolute;display:none;font-family:'Figtree',sans-serif;font-weight:600;border:2px solid var(--accent);border-radius:6px;padding:0 6px;background:rgba(255,255,255,.92);color:#111;outline:none;min-width:90px;line-height:1.4}
+#result{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(12px + env(safe-area-inset-bottom,0px));z-index:5}
+#result img{max-width:100%;min-height:0;flex:1;object-fit:contain;border-radius:8px}
+#result p{margin:0;color:var(--muted);text-align:center;font-size:14px}
+</style>
+</head>
+<body>
+<header>Cell Annotator</header>
+<main>
+  <div id="start">
+    <p>Take a photo of your cells or upload one, then draw lines and add labels.</p>
+    <div class="row">
+      <label class="btn primary">Take photo<input type="file" accept="image/*" capture="environment" id="cam"></label>
+      <label class="btn">Upload photo<input type="file" accept="image/*" id="up"></label>
+    </div>
+  </div>
+  <div id="editor">
+    <div class="bar">
+      <button id="tLine" class="on">Line</button>
+      <button id="tText">Label</button>
+      <button id="sMinus" aria-label="Smaller label text">A−</button>
+      <button id="sPlus" aria-label="Larger label text">A+</button>
+      <span class="bar" id="sws"></span>
+    </div>
+    <div class="stage"><div class="wrap"><canvas id="c"></canvas><input id="ti" type="text" autocomplete="off"></div></div>
+    <div class="bar">
+      <button id="undo">Undo</button>
+      <button id="clear">Clear</button>
+      <label class="btn">New photo<input type="file" accept="image/*" id="up2"></label>
+      <button id="done" class="primary">Done</button>
+    </div>
+  </div>
+</main>
+<div id="result">
+  <img id="out" alt="Annotated photo">
+  <p>Press and hold the image (or right-click on a computer) to save or share it.</p>
+  <button id="back">Back to editing</button>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('c'),ctx=cv.getContext('2d'),ti=$('ti');
+const COLORS=['#ff3b30','#ffd60a','#34c759','#ffffff','#111111'];
+let img=null,items=[],tool='line',color=COLORS[0],drag=null,pend=null;
+let sz=1,keep=false;
+const lw=()=>Math.max(3,cv.width/300), fs=()=>Math.max(20,cv.width/32)*sz;
+
+COLORS.forEach((c,i)=>{const b=document.createElement('button');b.className='sw'+(i?'':' on');b.style.background=c;b.setAttribute('aria-label','Colour '+c);
+ b.onclick=()=>{color=c;document.querySelectorAll('.sw').forEach(x=>x.classList.remove('on'));b.classList.add('on')};$('sws').appendChild(b)});
+
+function setTool(t){commit();tool=t;$('tLine').classList.toggle('on',t==='line');$('tText').classList.toggle('on',t==='text')}
+$('tLine').onclick=()=>setTool('line');$('tText').onclick=()=>setTool('text');
+
+function load(file){
+  if(!file)return;
+  const url=URL.createObjectURL(file),im=new Image();
+  im.onload=()=>{
+    const s=Math.min(1,2000/Math.max(im.naturalWidth,im.naturalHeight));
+    cv.width=Math.round(im.naturalWidth*s);cv.height=Math.round(im.naturalHeight*s);
+    img=im;items=[];drag=null;
+    $('start').style.display='none';$('editor').style.display='flex';
+    draw();URL.revokeObjectURL(url);
+  };
+  im.src=url;
+}
+['cam','up','up2'].forEach(id=>$(id).addEventListener('change',e=>{load(e.target.files[0]);e.target.value=''}));
+
+function drawItem(it){
+  if(it.t==='line'){
+    ctx.lineCap='round';ctx.strokeStyle='rgba(0,0,0,.45)';ctx.lineWidth=lw()+2;
+    ctx.beginPath();ctx.moveTo(it.a.x,it.a.y);ctx.lineTo(it.b.x,it.b.y);ctx.stroke();
+    ctx.strokeStyle=it.c;ctx.lineWidth=lw();ctx.stroke();
+    ctx.fillStyle=it.c;[it.a,it.b].forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,lw()*1.4,0,7);ctx.fill()});
+  }else{
+    const z=it.z||fs();ctx.font=`600 ${z}px Figtree, system-ui, sans-serif`;ctx.textBaseline='middle';ctx.lineJoin='round';
+    ctx.lineWidth=z/5;ctx.strokeStyle=it.c==='#111111'?'#fff':'rgba(0,0,0,.75)';
+    ctx.strokeText(it.s,it.x,it.y);ctx.fillStyle=it.c;ctx.fillText(it.s,it.x,it.y);
+  }
+}
+function draw(){
+  if(!img)return;
+  ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.width,cv.height);
+  items.forEach(drawItem);
+  if(drag)drawItem({t:'line',a:drag.a,b:drag.b,c:color});
+}
+if(document.fonts&&document.fonts.load){document.fonts.load('600 20px Figtree').then(draw).catch(()=>{})}
+
+function pos(e){const r=cv.getBoundingClientRect();return{x:(e.clientX-r.left)*cv.width/r.width,y:(e.clientY-r.top)*cv.height/r.height}}
+cv.addEventListener('pointerdown',e=>{
+  if(!img)return;e.preventDefault();commit();
+  if(tool==='line'){cv.setPointerCapture(e.pointerId);const p=pos(e);drag={a:p,b:p}}
+});
+cv.addEventListener('pointermove',e=>{if(drag){drag.b=pos(e);draw()}});
+cv.addEventListener('pointerup',e=>{
+  if(tool==='line'&&drag){
+    drag.b=pos(e);
+    if(Math.hypot(drag.b.x-drag.a.x,drag.b.y-drag.a.y)>6)items.push({t:'line',a:drag.a,b:drag.b,c:color});
+    drag=null;draw();
+  }
+});
+cv.addEventListener('pointercancel',()=>{drag=null;draw()});
+cv.addEventListener('click',e=>{if(img&&tool==='text')openInput(pos(e))});
+
+function openInput(p){
+  const r=cv.getBoundingClientRect(),k=r.width/cv.width,f=Math.max(16,fs()*k),h=f*1.4;
+  pend=p;ti.value='';ti.style.display='block';
+  ti.style.fontSize=f+'px';ti.style.height=h+'px';
+  ti.style.left=Math.max(0,Math.min(p.x*k,r.width-120))+'px';ti.style.top=(p.y*k-h/2)+'px';
+  ti.focus();
+  setTimeout(()=>{try{ti.scrollIntoView({block:'center',behavior:'smooth'})}catch(_){}},300);
+}
+function commit(){
+  if(!pend)return;
+  const s=ti.value.trim(),p=pend;pend=null;ti.style.display='none';
+  if(s){items.push({t:'text',x:p.x,y:p.y,s,c:color,z:fs()});draw()}
+}
+ti.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();commit()}if(e.key==='Escape'){pend=null;ti.style.display='none'}});
+ti.addEventListener('blur',()=>{if(!keep)commit()});
+function sizeInput(){const r=cv.getBoundingClientRect(),k=r.width/cv.width,f=Math.max(16,fs()*k),h=f*1.4;ti.style.fontSize=f+'px';ti.style.height=h+'px';ti.style.top=(pend.y*k-h/2)+'px'}
+function bump(d){sz=Math.min(4,Math.max(.4,sz*d));if(pend){sizeInput();ti.focus()}keep=false}
+[['sMinus',1/1.25],['sPlus',1.25]].forEach(([id,d])=>{const b=$(id);b.addEventListener('pointerdown',()=>{keep=!!pend});b.addEventListener('click',()=>bump(d))});
+
+$('undo').onclick=()=>{commit();items.pop();draw()};
+$('clear').onclick=()=>{commit();items=[];draw()};
+$('done').onclick=()=>{commit();draw();$('out').src=cv.toDataURL('image/jpeg',0.92);$('result').style.display='flex'};
+$('back').onclick=()=>{$('result').style.display='none'};
+</script>
+</body>
+</html>
